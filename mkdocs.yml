@@ -1,5 +1,5 @@
 site_name: Oleg Sklyarov Notes
-site_description: Engineering notes about Rails, Ruby, Python, PostgreSQL, VPN, Networking and AI.
+site_description: Engineering notes about distributed systems, databases, programming languages, VPN, networking and AI.
 site_url: https://olegsklyarov.github.io/
 
 repo_name: olegsklyarov/olegsklyarov.github.io
@@ -79,11 +79,6 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - pymdownx.tilde
-
-nav:
-  - Home: index.md
-  - Databases:
-      - ActiveRecord without Rails: databases/active-record-without-rails.md
 
 extra:
   social:
