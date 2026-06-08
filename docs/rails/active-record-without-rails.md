@@ -1,341 +1,182 @@
 ---
-git_creation_date_localized: "2026-06-08"
+git_creation_date_localized: '2026-06-08'
 ---
 
-# ActiveRecord без Rails
+# Практика Active Record — ORM из Rails без Rails
 
-## Введение
+Сегодня попробовал использовать Active Record вне Rails-приложения. Цель — работать с PostgreSQL без написания SQL-запросов вручную.
 
-ActiveRecord — это ORM-слой Rails, но он не привязан к полноценному фреймворку. Пакет `activerecord` можно использовать как самостоятельную библиотеку в Ruby-скриптах, rake-задачах, консольных утилитах и микросервисах, где нужен удобный доступ к PostgreSQL без поднятия всего стека Rails.
+Для этого достаточно установить два гема:
 
-Типичные сценарии:
-
-- миграция данных между системами;
-- одноразовые административные скрипты;
-- фоновые воркеры, которым нужен только доступ к БД;
-- прототипирование SQL-запросов с объектной моделью поверх существующей схемы.
-
-В этой заметке разберём минимальный рабочий пример: подключение к PostgreSQL, описание модели, чтение и запись данных, а также нюансы управления соединениями.
-
-## Задача
-
-Предположим, в PostgreSQL уже есть таблица `users` со следующей схемой:
-
-```sql
-CREATE TABLE users (
-  id         BIGSERIAL PRIMARY KEY,
-  email      VARCHAR(255) NOT NULL UNIQUE,
-  name       VARCHAR(255),
-  active     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
+```sh
+gem install activerecord
+gem install pg
 ```
 
-Нужно написать Ruby-скрипт, который:
-
-1. Подключается к базе `app_development`.
-2. Находит активных пользователей.
-3. Создаёт новую запись.
-4. Корректно закрывает соединения при завершении.
-
-Для этого достаточно `activerecord` и драйвера `pg`.
-
-## Подключение к PostgreSQL
-
-Создайте `Gemfile`:
-
-```ruby
-source "https://rubygems.org"
-
-gem "activerecord", "~> 8.0"
-gem "pg", "~> 1.5"
-```
-
-Установите зависимости:
-
-```bash
-bundle install
-```
-
-Строка подключения для PostgreSQL обычно выглядит так:
-
-```ruby
-DATABASE_URL = "postgresql://postgres:secret@localhost:5432/app_development"
-```
-
-Либо можно передать параметры по отдельности:
-
-```ruby
-{
-  adapter:  "postgresql",
-  host:     "localhost",
-  port:     5432,
-  database: "app_development",
-  username: "postgres",
-  password: "secret"
-}
-```
-
-## establish_connection
-
-`ActiveRecord::Base.establish_connection` создаёт пул соединений и делает его доступным для всех моделей, наследующих `ActiveRecord::Base`.
+Запускаем irb и подключаемся к БД:
 
 ```ruby
 require "active_record"
 
 ActiveRecord::Base.establish_connection(
-  adapter:  "postgresql",
-  host:     "localhost",
-  database: "app_development",
-  username: "postgres",
+  adapter: "postgresql",
+  host: "localhost",
+  database: "mydb",
+  username: "user",
   password: "secret"
 )
 ```
 
-Если используется `DATABASE_URL`, достаточно одной строки:
+## Zero-configuration модель
 
-```ruby
-ActiveRecord::Base.establish_connection(ENV.fetch("DATABASE_URL"))
-```
-
-После вызова `establish_connection` ActiveRecord готов выполнять SQL через модели. Отдельно поднимать Rails-приложение не нужно.
-
-## Создание модели
-
-Модель — это Ruby-класс, который маппится на таблицу. По умолчанию имя таблицы выводится из имени класса: `User` → `users`.
+Создаем класс без единой строчки настроек:
 
 ```ruby
 class User < ActiveRecord::Base
-  # Таблица users уже существует — миграции не нужны.
 end
 ```
 
-Если имя таблицы нестандартное, укажите его явно:
+Если в БД существует таблица `users`, Active Record автоматически:
+
+- найдет таблицу;
+- прочитает её структуру;
+- определит типы колонок;
+- создаст методы доступа к полям.
+
+Получается полноценная модель без описания атрибутов.
+
+## Изучаем структуру таблицы
+
+ORM:
 
 ```ruby
-class User < ActiveRecord::Base
-  self.table_name = "app_users"
-end
+User.column_names
+User.columns.map { |c| [c.name, c.type] }
 ```
 
-Для существующей legacy-схемы можно отключить автоматические timestamp-колонки, если их нет:
+SQL:
 
-```ruby
-class LegacyOrder < ActiveRecord::Base
-  self.table_name = "orders"
-  self.record_timestamps = false
-end
+```sql
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'users';
 ```
-
-## Исследование схемы таблицы
-
-ActiveRecord умеет читать метаданные из PostgreSQL через `connection` и `columns`.
-
-Список колонок:
-
-```ruby
-User.columns.each do |column|
-  puts "#{column.name}: #{column.type}, null: #{column.null}"
-end
-```
-
-Пример вывода:
-
-```
-id: integer, null: false
-email: string, null: false
-name: string, null: true
-active: boolean, null: false
-created_at: datetime, null: false
-updated_at: datetime, null: false
-```
-
-Проверить, существует ли таблица:
-
-```ruby
-ActiveRecord::Base.connection.table_exists?(:users)
-# => true
-```
-
-Получить SQL-тип колонки:
-
-```ruby
-User.columns_hash["email"].sql_type
-# => "character varying(255)"
-```
-
-Это удобно при работе с чужой схемой, когда документации нет, а нужно быстро понять структуру данных.
 
 ## Поиск записей
 
-ActiveRecord генерирует параметризованные SQL-запросы, защищая от SQL-инъекций.
+ORM:
 
 ```ruby
-# Все активные пользователи
-User.where(active: true)
-
-# Один пользователь по email
-User.find_by(email: "alice@example.com")
-
-# Первые 10 записей, отсортированные по id
-User.order(:id).limit(10)
-
-# Подсчёт
-User.where(active: true).count
+User.find_by(last_name: "Ivanov")
+User.where(last_name: "Ivanov")
 ```
 
-Сгенерированный SQL для `User.where(active: true)`:
+SQL:
 
 ```sql
-SELECT "users".* FROM "users" WHERE "users"."active" = TRUE
+SELECT *
+FROM users
+WHERE last_name = 'Ivanov';
 ```
 
-Для сложных условий можно использовать Arel или сырой SQL с биндингами:
+Посмотреть сгенерированный SQL:
 
 ```ruby
-User.where("created_at > ?", 1.week.ago)
-User.where("name ILIKE ?", "%alice%")
+User.where(last_name: "Ivanov").to_sql
 ```
-
-`find` по первичному ключу бросает `ActiveRecord::RecordNotFound`, если запись не найдена. `find_by` возвращает `nil`.
 
 ## Вставка данных
 
-Создание одной записи:
+ORM:
 
 ```ruby
-user = User.create!(
-  email: "bob@example.com",
-  name:  "Bob",
-  active: true
+user = User.new(
+  first_name: "Ivan",
+  last_name: "Ivanov"
+)
+user.save
+```
+
+или короче:
+
+```ruby
+User.create!(
+  first_name: "Ivan",
+  last_name: "Ivanov"
 )
 ```
 
-`create!` валидирует объект и бросает исключение при ошибке. Безопасный вариант без исключения — `create`.
-
-Массовая вставка через `insert_all` (Rails 6+), минуя callbacks и validations:
-
-```ruby
-User.insert_all([
-  { email: "carol@example.com", name: "Carol", active: true, created_at: Time.now, updated_at: Time.now },
-  { email: "dave@example.com",  name: "Dave",  active: true, created_at: Time.now, updated_at: Time.now }
-])
-```
-
-Обновление:
-
-```ruby
-user = User.find_by!(email: "bob@example.com")
-user.update!(name: "Robert")
-```
-
-Транзакция:
-
-```ruby
-ActiveRecord::Base.transaction do
-  user = User.create!(email: "eve@example.com", name: "Eve")
-  user.update!(active: false)
-end
-```
-
-## Сравнение с psql
-
-Тот же результат в `psql`:
+SQL:
 
 ```sql
--- Поиск
-SELECT * FROM users WHERE active = TRUE;
-
--- Вставка
-INSERT INTO users (email, name, active, created_at, updated_at)
-VALUES ('bob@example.com', 'Bob', TRUE, NOW(), NOW());
-
--- Обновление
-UPDATE users SET name = 'Robert', updated_at = NOW()
-WHERE email = 'bob@example.com';
+INSERT INTO users(first_name, last_name)
+VALUES ('Ivan', 'Ivanov');
 ```
 
-| Аспект | ActiveRecord | psql |
-|--------|--------------|------|
-| Параметризация | Автоматическая | Ручная (`$1`, `$2`) |
-| Маппинг на объекты | Встроенный | Нет |
-| Callbacks / validations | Да | Нет |
-| Скорость для разовых задач | Ниже (overhead ORM) | Выше |
-| Переносимость логики | Ruby-код | SQL-скрипты |
+## Где живет TCP-соединение?
 
-ActiveRecord оправдан, когда логика сложная, нужны транзакции на уровне объектов или код будет переиспользован. Для простого `SELECT COUNT(*)` быстрее и прозрачнее чистый SQL.
-
-## Где живёт соединение
-
-После `establish_connection` соединение хранится в пуле внутри `ActiveRecord::Base.connection_handler`. Каждый поток получает своё соединение из пула при первом обращении к БД.
+Подключение создается через:
 
 ```ruby
-ActiveRecord::Base.connection_pool
-# => #<ActiveRecord::ConnectionAdapters::ConnectionPool ...>
+ActiveRecord::Base.establish_connection(...)
 ```
 
-Текущее соединение потока:
+Соединение не хранится в объекте User.
+
+Структура выглядит примерно так:
+
+```text
+User
+  ↓
+ActiveRecord::Base
+  ↓
+ConnectionPool
+  ↓
+PostgreSQLAdapter
+  ↓
+PG::Connection
+  ↓
+TCP socket
+```
+
+Посмотреть текущее соединение:
 
 ```ruby
 ActiveRecord::Base.connection
 ```
 
-Несколько моделей, наследующих `ActiveRecord::Base`, разделяют один пул, если не указано иное через `establish_connection` на уровне класса.
-
-Для второй базы данных создайте абстрактный класс:
+Нативное соединение PostgreSQL:
 
 ```ruby
-class AnalyticsRecord < ActiveRecord::Base
-  self.abstract_class = true
-  establish_connection ENV.fetch("ANALYTICS_DATABASE_URL")
-end
-
-class Event < AnalyticsRecord
-end
+ActiveRecord::Base.connection.raw_connection
 ```
 
-## Connection Pool
+## Что такое пул соединений?
 
-Пул ограничивает число одновременных соединений с PostgreSQL. По умолчанию `pool: 5`.
+Active Record использует пул соединений.
+
+Посмотреть его состояние:
 
 ```ruby
-ActiveRecord::Base.establish_connection(
-  adapter: "postgresql",
-  host:    "localhost",
-  database: "app_development",
-  username: "postgres",
-  password: "secret",
-  pool:    10,
-  checkout_timeout: 5
-)
+ActiveRecord::Base.connection_pool.stat
 ```
 
-Полезные методы:
+Пример результата:
 
 ```ruby
-pool = ActiveRecord::Base.connection_pool
-
-pool.stat
-# => { size: 5, connections: 1, busy: 0, dead: 0, idle: 1, waiting: 0, checkout_timeout: 5.0 }
-
-pool.connections.size  # число открытых соединений в пуле
-pool.active_connection? # есть ли соединение у текущего потока
+{
+  size: 5,
+  connections: 1,
+  busy: 0,
+  idle: 1
+}
 ```
 
-В многопоточном скрипте (например, с `parallel` gem) каждый поток должен получать соединение из пула. Не передавайте объект `connection` между потоками — это приведёт к ошибкам.
+Идея проста: вместо постоянного открытия и закрытия TCP-соединений используется небольшой набор уже открытых соединений.
 
-При исчерпании пула ActiveRecord ждёт `checkout_timeout` секунд и бросает `ActiveRecord::ConnectionTimeoutError`.
+В веб-приложении это позволяет многим потокам быстро выполнять запросы к БД.
 
-## Закрытие соединений
-
-В длинно живущих процессах важно освобождать соединения. В коротких скриптах ОС закроет их при завершении процесса, но явное закрытие — хорошая практика.
-
-Вернуть соединение в пул после использования в текущем потоке:
-
-```ruby
-ActiveRecord::Base.connection_pool.release_connection
-```
+## Как закрыть соединение?
 
 Закрыть все соединения пула:
 
@@ -343,65 +184,43 @@ ActiveRecord::Base.connection_pool.release_connection
 ActiveRecord::Base.connection_pool.disconnect!
 ```
 
-Типичный шаблон для скрипта:
+Удалить конфигурацию подключения полностью:
 
 ```ruby
-require "active_record"
-
-ActiveRecord::Base.establish_connection(ENV.fetch("DATABASE_URL"))
-
-begin
-  User.where(active: true).each { |u| puts u.email }
-  User.create!(email: "new@example.com", name: "New User")
-ensure
-  ActiveRecord::Base.connection_pool.disconnect!
-end
+ActiveRecord::Base.remove_connection
 ```
 
-В веб-приложениях на Puma/Unicorn пул живёт весь жизненный цикл воркера. В Sidekiq-джобах соединение автоматически возвращается в пул после выполнения задачи, если middleware настроен корректно.
+Посмотреть активные подключения со стороны PostgreSQL:
+
+```sql
+SELECT pid, usename, state
+FROM pg_stat_activity;
+```
 
 ## Выводы
 
-ActiveRecord без Rails — практичный инструмент для скриптов и утилит, которым нужен объектный доступ к PostgreSQL. Минимальная настройка сводится к `establish_connection` и объявлению модели.
+После многих лет работы через SQL подход Active Record выглядит непривычно.
 
-Ключевые моменты:
+Вместо:
 
-- `activerecord` + `pg` — достаточно для работы с PostgreSQL.
-- `establish_connection` создаёт пул соединений, общий для наследников `ActiveRecord::Base`.
-- Схему можно исследовать через `columns`, `table_exists?` и `connection`.
-- Для массовых операций предпочитайте `insert_all` / `upsert_all` вместо тысяч `create!`.
-- Управляйте пулом явно в скриптах: `disconnect!` в `ensure`-блоке.
-- Для простых разовых запросов чистый SQL или `psql` могут быть быстрее и прозрачнее.
+```sql
+SELECT *
+FROM users
+WHERE last_name = 'Ivanov';
+```
 
-Полный минимальный скрипт:
+получаем:
 
 ```ruby
-#!/usr/bin/env ruby
-# frozen_string_literal: true
-
-require "active_record"
-
-class User < ActiveRecord::Base
-end
-
-ActiveRecord::Base.establish_connection(ENV.fetch("DATABASE_URL"))
-
-begin
-  puts "Active users: #{User.where(active: true).count}"
-
-  user = User.find_or_create_by!(email: "script@example.com") do |u|
-    u.name = "Script User"
-    u.active = true
-  end
-
-  puts "Created/found user ##{user.id}: #{user.email}"
-ensure
-  ActiveRecord::Base.connection_pool.disconnect!
-end
+User.where(last_name: "Ivanov")
 ```
 
-Запуск:
+Вместо описания структуры таблиц в коде Active Record сам изучает схему БД и генерирует методы на лету.
 
-```bash
-DATABASE_URL="postgresql://postgres:secret@localhost:5432/app_development" ruby script.rb
-```
+Главный плюс — код практически не зависит от конкретной СУБД. PostgreSQL, SQLite, MySQL и другие поддерживаемые базы данных используют один и тот же интерфейс ORM.
+
+При работе напрямую через SQL приходится знать особенности конкретной СУБД: типы данных, синтаксис запросов, диалекты SQL, особенности драйверов.
+
+С ORM большая часть этих различий скрыта за единым API.
+
+Для исследовательской работы через REPL связка irb + ActiveRecord + PostgreSQL оказалась неожиданно удобной и позволяет быстро изучать данные и структуру существующей базы без полноценного Rails-приложения.
