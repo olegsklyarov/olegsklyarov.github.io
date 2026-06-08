@@ -4,7 +4,7 @@ site_url: https://olegsklyarov.github.io/
 
 repo_name: olegsklyarov/olegsklyarov.github.io
 repo_url: https://github.com/olegsklyarov/olegsklyarov.github.io
-edit_uri: edit/main/docs/
+edit_uri: edit/master/docs/
 
 theme:
   name: material
@@ -38,6 +38,12 @@ theme:
 plugins:
   - search:
       lang: ru
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: date
+      locale: ru
+      timezone: Europe/Moscow
+      fallback_to_build_date: true
 
 markdown_extensions:
   - admonition

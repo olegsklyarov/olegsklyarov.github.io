@@ -1,3 +1,7 @@
+---
+git_creation_date_localized: "2026-06-08"
+---
+
 # ActiveRecord без Rails
 
 ## Введение
