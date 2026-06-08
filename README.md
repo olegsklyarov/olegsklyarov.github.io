@@ -13,7 +13,13 @@ pip install -r requirements.txt
 Запустите локальный сервер с автоперезагрузкой:
 
 ```bash
-mkdocs serve
+make serve
+```
+
+или:
+
+```bash
+mkdocs serve --livereload --dirty
 ```
 
 Сайт будет доступен по адресу [http://127.0.0.1:8000/](http://127.0.0.1:8000/).

@@ -6,4 +6,4 @@ format:
 	mdformat --extensions front_matters --extensions tables $(MD_FILES)
 
 serve:
-	mkdocs serve
+	mkdocs serve --livereload --dirty
