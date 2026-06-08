@@ -82,8 +82,8 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Rails:
-      - ActiveRecord without Rails: rails/active-record-without-rails.md
+  - Databases:
+      - ActiveRecord without Rails: databases/active-record-without-rails.md
 
 extra:
   social:
