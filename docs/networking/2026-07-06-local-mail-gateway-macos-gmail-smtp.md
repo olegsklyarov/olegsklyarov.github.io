@@ -80,7 +80,7 @@ host smtp.gmail.com
 port 587
 from your.name@gmail.com
 user your.name@gmail.com
-passwordeval security find-generic-password -a oleg.sklyarov@gmail.com -s gmail-smtp -w
+passwordeval security find-generic-password -a your.name@gmail.com -s gmail-smtp -w
 account default : gmail
 logfile ~/.msmtp.log
 ```
